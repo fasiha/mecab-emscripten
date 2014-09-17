@@ -1275,3 +1275,149 @@ int mecab_do(int argc, char **argv) {
 
 #undef WHAT_ERROR
 }
+
+int mecab_do2(char *args) {
+#define WHAT_ERROR(msg) do {                    \
+    std::cout << msg << std::endl;              \
+    return EXIT_FAILURE; }                      \
+  while (0);
+
+  MeCab::Param param;
+  if (!param.open(args, MeCab::long_options)) {
+    std::cout << param.what() << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  if (param.get<bool>("help")) {
+    std::cout << param.help() << std::endl;
+    return EXIT_SUCCESS;
+  }
+
+  if (param.get<bool>("version")) {
+    std::cout << param.version() << std::endl;
+    return EXIT_SUCCESS;
+  }
+
+  if (!load_dictionary_resource(&param)) {
+    std::cout << param.what() << std::endl;
+    return EXIT_SUCCESS;
+  }
+
+  if (param.get<int>("lattice-level") >= 1) {
+    std::cerr << "lattice-level is DEPERCATED. "
+              << "use --marginal or --nbest." << std::endl;
+  }
+
+  MeCab::scoped_ptr<MeCab::ModelImpl> model(new MeCab::ModelImpl);
+  if (!model->open(param)) {
+    std::cout << MeCab::getLastError() << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  std::string ofilename = param.get<std::string>("output");
+  if (ofilename.empty()) {
+    ofilename = "-";
+  }
+
+  const int nbest = param.get<int>("nbest");
+  if (nbest <= 0 || nbest > NBEST_MAX) {
+    WHAT_ERROR("invalid N value");
+  }
+
+  MeCab::ostream_wrapper ofs(ofilename.c_str());
+  if (!*ofs) {
+    WHAT_ERROR("no such file or directory: " << ofilename);
+  }
+
+  if (param.get<bool>("dump-config")) {
+    param.dump_config(&*ofs);
+    return EXIT_FAILURE;
+  }
+
+  if (param.get<bool>("dictionary-info")) {
+    for (const MeCab::DictionaryInfo *d = model->dictionary_info();
+         d; d = d->next) {
+      *ofs << "filename:\t" << d->filename << std::endl;
+      *ofs << "version:\t" << d->version << std::endl;
+      *ofs << "charset:\t" << d->charset << std::endl;
+      *ofs << "type:\t" << d->type   << std::endl;
+      *ofs << "size:\t" << d->size << std::endl;
+      *ofs << "left size:\t" << d->lsize << std::endl;
+      *ofs << "right size:\t" << d->rsize << std::endl;
+      *ofs << std::endl;
+    }
+    return EXIT_FAILURE;
+  }
+
+  const std::vector<std::string>& rest_ = param.rest_args();
+  std::vector<std::string> rest = rest_;
+
+  if (rest.empty()) {
+    rest.push_back("-");
+  }
+
+  size_t ibufsize = std::min(MAX_INPUT_BUFFER_SIZE,
+                             std::max(param.get<int>
+                                            ("input-buffer-size"),
+                                            MIN_INPUT_BUFFER_SIZE));
+
+  const bool partial = param.get<bool>("partial");
+  if (partial) {
+    ibufsize *= 8;
+  }
+
+  MeCab::scoped_array<char> ibuf_data(new char[ibufsize]);
+  char *ibuf = ibuf_data.get();
+
+  MeCab::scoped_ptr<MeCab::Tagger> tagger(model->createTagger());
+
+  if (!tagger.get()) {
+    WHAT_ERROR("cannot create tagger");
+  }
+
+  for (size_t i = 0; i < rest.size(); ++i) {
+    MeCab::istream_wrapper ifs(rest[i].c_str());
+    if (!*ifs) {
+      WHAT_ERROR("no such file or directory: " << rest[i]);
+    }
+
+    while (true) {
+      if (!partial) {
+        ifs->getline(ibuf, ibufsize);
+      } else {
+        std::string sentence;
+        MeCab::scoped_fixed_array<char, BUF_SIZE> line;
+        for (;;) {
+          if (!ifs->getline(line.get(), line.size())) {
+            ifs->clear(std::ios::eofbit|std::ios::badbit);
+            break;
+          }
+          sentence += line.get();
+          sentence += '\n';
+          if (std::strcmp(line.get(), "EOS") == 0 || line[0] == '\0') {
+            break;
+          }
+        }
+        std::strncpy(ibuf, sentence.c_str(), ibufsize);
+      }
+      if (ifs->eof() && !ibuf[0]) {
+        return false;
+      }
+      if (ifs->fail()) {
+        std::cerr << "input-buffer overflow. "
+                  << "The line is split. use -b #SIZE option." << std::endl;
+        ifs->clear();
+      }
+      const char *r = (nbest >= 2) ? tagger->parseNBest(nbest, ibuf) :
+          tagger->parse(ibuf);
+      if (!r)  {
+        WHAT_ERROR(tagger->what());
+      }
+      *ofs << r << std::flush;
+    }
+  }
+
+  return EXIT_SUCCESS;
+
+#undef WHAT_ERROR
+}

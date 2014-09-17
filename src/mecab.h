@@ -755,6 +755,7 @@ extern "C" {
 
   /* static functions */
   MECAB_DLL_EXTERN int           mecab_do(int argc, char **argv);
+  MECAB_DLL_EXTERN int           mecab_do2(char *args);
   MECAB_DLL_EXTERN int           mecab_dict_index(int argc, char **argv);
   MECAB_DLL_EXTERN int           mecab_dict_gen(int argc, char **argv);
   MECAB_DLL_EXTERN int           mecab_cost_train(int argc, char **argv);
