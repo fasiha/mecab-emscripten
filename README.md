@@ -76,6 +76,6 @@ MeCab is released under BSD, GPL, or LGPL licenses, and so I have chosen to lice
 
 MeCab is copyrighted by Taku Kudo and NTT. The IPADIC data is copyrighted by the Nara Institute of Science and Technology, and its authors have released it under a BSD-like license (see `COPYING.ipadic`).
 
-Emscripten is the work of Alon Zakai, of the Mozilla Foundation, and many contributors. This project also uses D3.js, by Mike Bostock and many contributors.
+Emscripten is the work of Alon Zakai, of the Mozilla Foundation, and many contributors. This project also uses D3.js, by Mike Bostock, of the New York Times, and many contributors.
 
 Many thanks to all these projects' authors.
