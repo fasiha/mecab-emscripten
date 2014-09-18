@@ -4,11 +4,12 @@ var spinnerElement = document.getElementById('spinner');
 var mecab_do;
 
 d3.select('#examples-toggle').on('click', function() {
-  d3.select('#examples-toggle').html('Examples. For details, see \
+  d3.select('#examples-toggle').html('Examples (for details, see \
 this <a href="http://www.mwsoft.jp/programming/munou/mecab_command.html">\
-guide</a>.');
+guide</a>, in Japanese)');
   d3.select('dl#example-arguments').property("hidden", false);
 })
+
 d3.select('button#mecab-submit-button').on('click', function() {
   var args = d3.select('#mecab-args').property('value');
   args += " -r mecabrc -d ipadic/ -o output.txt input.txt";
@@ -20,7 +21,8 @@ d3.select('button#mecab-submit-button').on('click', function() {
     text += '\n';
   }
   FS.writeFile('input.txt', text);
-  // console.log('args',args,'text',text);
+  FS.writeFile('output.txt', "");
+
   mecab_do(args);
 
   var output = FS.readFile('output.txt', {encoding : "utf8"});
@@ -45,23 +47,17 @@ var setupFiles = function() {
 var wrapFunctions = function() {
   mecab_do = Module.cwrap('mecab_do2', 'number', ['string']);
 };
-var printer = (function() {
-  var element = document.getElementById('output');
-  if (element) element.value = '';  // clear browser cache
-  return function(text) {
-    text = Array.prototype.slice.call(arguments).join(' ');
-    // These replacements are necessary if you render to raw HTML
-    // text = text.replace(/&/g, "&amp;");
-    // text = text.replace(/</g, "&lt;");
-    // text = text.replace(/>/g, "&gt;");
-    // text = text.replace('\n', '<br>', 'g');
-    // console.log("OUTPUT", text);
-    if (element) {
-      element.value += text + "\n";
-      element.scrollTop = element.scrollHeight;  // focus on bottom
-    }
-  };
-})();
+var printer = function(text) {
+  text = Array.prototype.slice.call(arguments).join(' ');
+  // These replacements are necessary if you render to raw HTML
+  // text = text.replace(/&/g, "&amp;");
+  // text = text.replace(/</g, "&lt;");
+  // text = text.replace(/>/g, "&gt;");
+  // text = text.replace('\n', '<br>', 'g');
+  // console.log("OUTPUT", text);
+  FS.writeFile('output.txt', text);
+  console.log(text);
+};
 var printErr = function(text) {
   text = Array.prototype.slice.call(arguments).join(' ');
   if (0) {              // XXX disabled for safety typeof dump == 'function') {
@@ -109,7 +105,7 @@ var Module = {
   totalDependencies : 0,
   monitorRunDependencies : monitorRunDependencies
 };
-Module.setStatus('Downloading, please wait.');
+Module.setStatus('Downloading data, please wait.');
 window.onerror = function(event) {
   // TODO: do not warn on ok events like simulating an infinite loop or
   // exitStatus

@@ -14,14 +14,16 @@
         width: 50em;
         background: rgb(33,33,33);
         color: white;
-        font-size: 1.0em;
+        font-size: 1.2em;
     }
     
     #input-area, #mecab-printouts, .mecab-output-block{
       background: rgb(230, 230, 230);
+      padding: 0em 0.25em;
+      display: inline-block;
     }
 
-    #input-area h1, #mecab-printouts h1, .mecab-output-block h1 {
+    #input-area h1, .mecab-output-block h1 {
         font-size: 1.0em;
         margin-bottom: 0pt;
     }
@@ -35,15 +37,22 @@
         margin-top: 0;
     }
 
-    #mecab-printouts {
-        margin-top: 2em;
-    }
-
     .mecab-output-block, .mecab-output {
         margin-top: 1em;
     }
     .mecab-output-block {
           margin-bottom:1em;
+    }
+
+    #status {
+        background: darkred;
+        color: white;
+        font-size: 2em;
+        font-weight: bolder;
+    }
+
+    body {
+        font-family: Helvetica, "Helvetica Neue", Arial, "ヒラギノ角ゴ Pro W3", "Hiragino Kaku Gothic Pro", Osaka, "メイリオ", Meiryo, "ＭＳ Ｐゴシック", "MS PGothic", "小塚明朝 Pro L", serif;
     }
 
     button {
@@ -60,7 +69,7 @@
     MeCab on the Web!
     </h1>
     <div class="spinner" id='spinner'></div>
-    <div class="emscripten" id="status">Downloading, please wait.</div>
+    <div class="emscripten" id="status">Downloading data, please wait.</div>
     <div class="emscripten">
       <progress value="0" max="100" id="progress" hidden=1></progress>
     </div>
@@ -76,7 +85,7 @@
 
         <textarea rows="1" id="mecab-args"></textarea>
 
-        <p id="examples-toggle">See examples...</p>
+        <p id="examples-toggle">Examples...</p>
         <dl id="example-arguments" hidden>
         <dt><tt>-O yomi</tt></dt>
         <dd>Convert to onyomi</dd>
@@ -86,19 +95,15 @@
         <dd>See full decomposition</dd>
         <dt><tt>--node-format=%m[%f[7]] --eos-format=\n --unk-format=%m[]</tt></dt>
         <dd>Anki Japanese Support formatting</dd>
+        <dt>Note to experienced users</dt>
+        <dd><tt>-r mecabrc -d ipadic/</tt> flags will be automatically added. The results are based on the IPADIC dictionary.
+        </dd>
         </dl>
             
         <button id="mecab-submit-button">Submit</button>        
     </div>
 
-    <div id="mecab-output"></div>
-
-
-    <div id="mecab-printouts">
-    <h1>Printouts</h1>
-    <textarea id="output" rows="8" cols="81"></textarea>
-    </div>
-    
+    <div id="mecab-output"></div>    
 
     <script type='text/javascript' src="index.js"></script>
     <script async type="text/javascript" src="mecab.js"></script>
