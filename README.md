@@ -79,3 +79,6 @@ MeCab is copyrighted by Taku Kudo and NTT. The IPADIC data is copyrighted by the
 Emscripten is the work of Alon Zakai, of the Mozilla Foundation, and many contributors. This project also uses D3.js, by Mike Bostock, of the New York Times, and many contributors.
 
 Many thanks to all these projects' authors.
+
+## License
+In case you missed it above, MeCab on the Web is released under the BSD license.
