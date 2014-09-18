@@ -31,7 +31,7 @@ $ export LD_LIBRARY_PATH="/usr/local/lib:$LD_LIBRARY_PATH"
 ### IPADIC dictionary
 Next, download and build the IPADIC dictionary for your native binary MeCab. [Download](https://code.google.com/p/mecab/downloads/list) the latest source release (`mecab-ipadic-2.7.0-20070801.tar.gz` as of September 2014). Decompress it, then run the following to configure, build, and install it:
 ```
-./configure --with-charset=charset && make && sudo make install
+./configure --with-charset=utf-8 && make && sudo make install
 ```
 
 You may test your installation of MeCab and the IPADIC dictionary by confirming that this command produces the following output:
