@@ -17988,10 +17988,10 @@ $as_echo "no" >&6; }
         fi
 fi
 
-if test -n "$GCC"; then
-   CFLAGS="-O3 -Wall "
-   CXXFLAGS="-O3 -Wall "
-fi
+#if test -n "$GCC"; then
+#   CFLAGS="-O3 -Wall "
+#   CXXFLAGS="-O3 -Wall "
+#fi
 
 
 # Check whether --with-charset was given.
