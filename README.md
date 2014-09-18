@@ -21,7 +21,7 @@ MeCab on the Web was built on a fresh install of Ubuntu 14.04 TLS (inside a Virt
 First, if you don't already have MeCab installed as a native compiled application, build it. Download the [latest source release](https://code.google.com/p/mecab/downloads/list) (`mecab-0.996.tar.gz` as of September 2014), uncompress it, build it and install it via 
 ```
 $ ./configure --with-charset=utf8 && make && make test && sudo make install
-``` 
+```
 
 In Linux, you may need to run the following before the `mecab` executable will work:
 ```
@@ -51,7 +51,7 @@ The `configure` script overrides the `CFLAGS` and `CXXFLAGS` arguments that are 
 
 Configure and compile MeCab to LLVM intermediate representation (IR) with the following
 ```
-$ EMCONFIGURE_JS=1 emconfigure ./configure  --with-charset=utf8 CXXFLAGS="-std=c++11 -O0" CFLAGS="-O0" && emmake make
+$ EMCONFIGURE_JS=1 emconfigure ./configure --with-charset=utf8 CXXFLAGS="-std=c++11 -O1" CFLAGS="-O1" && emmake make
 ```
 (The `configure` step will produce some scary-looking errors, but they are merely the bundled script doing some unusual things that Emscripten can't yet handle neatly.)
 
@@ -65,7 +65,7 @@ $ cp -r /usr/local/lib/mecab/dic/ipadic .
 
 Finally, build the Javascript, bundling the data in a separate file for use in a web browser:
 ```
-$ em++ -O0  mecab.bc libmecab.so -o mecab.js  -s EXPORTED_FUNCTIONS="['_mecab_do2']" --preload-file mecabrc --preload-file ipadic/
+$ em++ -O1 mecab.bc libmecab.so -o mecab.js -s EXPORTED_FUNCTIONS="['_mecab_do2']" --preload-file mecabrc --preload-file ipadic/
 ```
 Note that only Linux will produce `libmecab.so`; in Mac OS X, this file will be called `libmecab.dylib`, so adjust accordingly. Also note that that `mecab_do2` function was added for this project: it is a copy of the `mecab_do` function in tagger.cpp with one change that makes it easy to play with arguments coming from Javascript. tagger.cpp and mecab.h are the only two source code files from MeCab that were modified for this project.
 
