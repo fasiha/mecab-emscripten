@@ -3,19 +3,19 @@
 //
 //  Copyright(C) 2001-2011 Taku Kudo <taku@chasen.org>
 //  Copyright(C) 2004-2006 Nippon Telegraph and Telephone Corporation
-#include <algorithm>
-#include <iterator>
-#include <cmath>
-#include <cstring>
+#include "viterbi.h"
 #include "common.h"
 #include "connector.h"
 #include "mecab.h"
 #include "nbest_generator.h"
 #include "param.h"
-#include "viterbi.h"
 #include "scoped_ptr.h"
 #include "string_buffer.h"
 #include "tokenizer.h"
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <iterator>
 
 namespace MeCab {
 
@@ -23,8 +23,7 @@ namespace {
 void calc_alpha(Node *n, double beta) {
   n->alpha = 0.0;
   for (Path *path = n->lpath; path; path = path->lnext) {
-    n->alpha = logsumexp(n->alpha,
-                         -beta * path->cost + path->lnode->alpha,
+    n->alpha = logsumexp(n->alpha, -beta * path->cost + path->lnode->alpha,
                          path == n->lpath);
   }
 }
@@ -32,16 +31,13 @@ void calc_alpha(Node *n, double beta) {
 void calc_beta(Node *n, double beta) {
   n->beta = 0.0;
   for (Path *path = n->rpath; path; path = path->rnext) {
-    n->beta = logsumexp(n->beta,
-                        -beta * path->cost + path->rnode->beta,
+    n->beta = logsumexp(n->beta, -beta * path->cost + path->rnode->beta,
                         path == n->rpath);
   }
 }
 }  // namespace
 
-Viterbi::Viterbi()
-    :  tokenizer_(0), connector_(0),
-       cost_factor_(0) {}
+Viterbi::Viterbi() : tokenizer_(0), connector_(0), cost_factor_(0) {}
 
 Viterbi::~Viterbi() {}
 
@@ -53,10 +49,8 @@ bool Viterbi::open(const Param &param) {
   connector_.reset(new Connector);
   CHECK_FALSE(connector_->open(param)) << connector_->what();
 
-  CHECK_FALSE(tokenizer_->dictionary_info()->lsize ==
-              connector_->left_size() &&
-              tokenizer_->dictionary_info()->rsize ==
-              connector_->right_size())
+  CHECK_FALSE(tokenizer_->dictionary_info()->lsize == connector_->left_size() &&
+              tokenizer_->dictionary_info()->rsize == connector_->right_size())
       << "Transition table and dictionary are not compatible";
 
   cost_factor_ = param.get<int>("cost-factor");
@@ -121,9 +115,7 @@ const Tokenizer<Node, Path> *Viterbi::tokenizer() const {
   return tokenizer_.get();
 }
 
-const Connector *Viterbi::connector() const {
-  return connector_.get();
-}
+const Connector *Viterbi::connector() const { return connector_.get(); }
 
 // static
 bool Viterbi::forwardbackward(Lattice *lattice) {
@@ -131,7 +123,7 @@ bool Viterbi::forwardbackward(Lattice *lattice) {
     return true;
   }
 
-  Node **end_node_list   = lattice->end_nodes();
+  Node **end_node_list = lattice->end_nodes();
   Node **begin_node_list = lattice->begin_nodes();
 
   const size_t len = lattice->size();
@@ -158,9 +150,8 @@ bool Viterbi::forwardbackward(Lattice *lattice) {
     for (Node *node = begin_node_list[pos]; node; node = node->bnext) {
       node->prob = std::exp(node->alpha + node->beta - Z);
       for (Path *path = node->lpath; path; path = path->lnext) {
-        path->prob = std::exp(path->lnode->alpha
-                              - theta * path->cost
-                              + path->rnode->beta - Z);
+        path->prob = std::exp(path->lnode->alpha - theta * path->cost +
+                              path->rnode->beta - Z);
       }
     }
   }
@@ -203,14 +194,13 @@ bool Viterbi::buildAlternative(Lattice *lattice) {
     if (node->stat == MECAB_BOS_NODE || node->stat == MECAB_EOS_NODE) {
       continue;
     }
-    const size_t pos = node->surface - lattice->sentence() -
-        node->rlength + node->length;
+    const size_t pos =
+        node->surface - lattice->sentence() - node->rlength + node->length;
     std::cout.write(node->surface, node->length);
     std::cout << "\t" << node->feature << std::endl;
-    for (const Node *anode = begin_node_list[pos];
-         anode; anode = anode->bnext) {
-      if (anode->rlength == node->rlength &&
-          anode->length == node->length) {
+    for (const Node *anode = begin_node_list[pos]; anode;
+         anode = anode->bnext) {
+      if (anode->rlength == node->rlength && anode->length == node->length) {
         std::cout << "@ ";
         std::cout.write(anode->surface, anode->length);
         std::cout << "\t" << anode->feature << std::endl;
@@ -250,8 +240,7 @@ bool Viterbi::initPartial(Lattice *lattice) {
   if (!lattice->has_request_type(MECAB_PARTIAL)) {
     if (lattice->has_constraint()) {
       lattice->set_boundary_constraint(0, MECAB_TOKEN_BOUNDARY);
-      lattice->set_boundary_constraint(lattice->size(),
-                                       MECAB_TOKEN_BOUNDARY);
+      lattice->set_boundary_constraint(lattice->size(), MECAB_TOKEN_BOUNDARY);
     }
     return true;
   }
@@ -261,10 +250,9 @@ bool Viterbi::initPartial(Lattice *lattice) {
   strncpy(str, lattice->sentence(), lattice->size() + 1);
 
   std::vector<char *> lines;
-  const size_t lsize = tokenize(str, "\n",
-                                std::back_inserter(lines),
-                                lattice->size() + 1);
-  char* column[2];
+  const size_t lsize =
+      tokenize(str, "\n", std::back_inserter(lines), lattice->size() + 1);
+  char *column[2];
   scoped_array<char> buf(new char[lattice->size() + 1]);
   StringBuffer os(buf.get(), lattice->size() + 1);
 
@@ -301,8 +289,7 @@ bool Viterbi::initPartial(Lattice *lattice) {
     if (feature) {
       lattice->set_feature_constraint(pos, pos + len, feature);
       for (size_t n = 1; n < len; ++n) {
-        lattice->set_boundary_constraint(pos + n,
-                                         MECAB_INSIDE_TOKEN);
+        lattice->set_boundary_constraint(pos + n, MECAB_INSIDE_TOKEN);
       }
     }
     pos += len;
@@ -312,31 +299,30 @@ bool Viterbi::initPartial(Lattice *lattice) {
 }
 
 namespace {
-template <bool IsAllPath> bool connect(size_t pos, Node *rnode,
-                                       Node **begin_node_list,
-                                       Node **end_node_list,
-                                       const Connector *connector,
-                                       Allocator<Node, Path> *allocator) {
-  for (;rnode; rnode = rnode->bnext) {
-    register long best_cost = 2147483647;
-    Node* best_node = 0;
+template <bool IsAllPath>
+bool connect(size_t pos, Node *rnode, Node **begin_node_list,
+             Node **end_node_list, const Connector *connector,
+             Allocator<Node, Path> *allocator) {
+  for (; rnode; rnode = rnode->bnext) {
+    long best_cost = 2147483647;
+    Node *best_node = 0;
     for (Node *lnode = end_node_list[pos]; lnode; lnode = lnode->enext) {
-      register int lcost = connector->cost(lnode, rnode);  // local cost
-      register long cost = lnode->cost + lcost;
+      int lcost = connector->cost(lnode, rnode);  // local cost
+      long cost = lnode->cost + lcost;
 
       if (cost < best_cost) {
-        best_node  = lnode;
-        best_cost  = cost;
+        best_node = lnode;
+        best_cost = cost;
       }
 
       if (IsAllPath) {
-        Path *path   = allocator->newPath();
-        path->cost   = lcost;
-        path->rnode  = rnode;
-        path->lnode  = lnode;
-        path->lnext  = rnode->lpath;
+        Path *path = allocator->newPath();
+        path->cost = lcost;
+        path->rnode = rnode;
+        path->lnode = lnode;
+        path->lnext = rnode->lpath;
         rnode->lpath = path;
-        path->rnext  = lnode->rpath;
+        path->rnext = lnode->rpath;
         lnode->rpath = path;
       }
     }
@@ -360,7 +346,7 @@ template <bool IsAllPath> bool connect(size_t pos, Node *rnode,
 
 template <bool IsAllPath, bool IsPartial>
 bool Viterbi::viterbi(Lattice *lattice) const {
-  Node **end_node_list   = lattice->end_nodes();
+  Node **end_node_list = lattice->end_nodes();
   Node **begin_node_list = lattice->begin_nodes();
   Allocator<Node, Path> *allocator = lattice->allocator();
   const size_t len = lattice->size();
@@ -373,14 +359,11 @@ bool Viterbi::viterbi(Lattice *lattice) const {
 
   for (size_t pos = 0; pos < len; ++pos) {
     if (end_node_list[pos]) {
-      Node *right_node = tokenizer_->lookup<IsPartial>(begin + pos, end,
-                                                       allocator, lattice);
+      Node *right_node =
+          tokenizer_->lookup<IsPartial>(begin + pos, end, allocator, lattice);
       begin_node_list[pos] = right_node;
-      if (!connect<IsAllPath>(pos, right_node,
-                              begin_node_list,
-                              end_node_list,
-                              connector_.get(),
-                              allocator)) {
+      if (!connect<IsAllPath>(pos, right_node, begin_node_list, end_node_list,
+                              connector_.get(), allocator)) {
         lattice->set_what("too long sentence.");
         return false;
       }
@@ -393,11 +376,8 @@ bool Viterbi::viterbi(Lattice *lattice) const {
 
   for (long pos = len; static_cast<long>(pos) >= 0; --pos) {
     if (end_node_list[pos]) {
-      if (!connect<IsAllPath>(pos, eos_node,
-                              begin_node_list,
-                              end_node_list,
-                              connector_.get(),
-                              allocator)) {
+      if (!connect<IsAllPath>(pos, eos_node, begin_node_list, end_node_list,
+                              connector_.get(), allocator)) {
         lattice->set_what("too long sentence.");
         return false;
       }
@@ -410,4 +390,4 @@ bool Viterbi::viterbi(Lattice *lattice) const {
 
   return true;
 }
-}  // Mecab
+}  // namespace MeCab
