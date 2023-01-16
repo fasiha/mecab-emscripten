@@ -9,6 +9,8 @@
 #include <vector>
 #include "mecab.h"
 #include "thread.h"
+#include "scoped_ptr.h"
+#include "common.h"
 
 namespace MeCab {
 
