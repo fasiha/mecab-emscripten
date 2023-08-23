@@ -1,412 +1,413 @@
-//  MeCab -- Yet Another Part-of-Speech and Morphological Analyzer
+// MeCab -- Yet Another Part-of-Speech and Morphological Analyzer
 //
 //
 //  Copyright(C) 2001-2011 Taku Kudo <taku@chasen.org>
 //  Copyright(C) 2004-2006 Nippon Telegraph and Telephone Corporation
-#include <cstdio>
+#include <algorithm>
+#include <iterator>
+#include <cmath>
 #include <cstring>
-#include <fstream>
-#include <iostream>
 #include "common.h"
+#include "connector.h"
+#include "mecab.h"
+#include "nbest_generator.h"
 #include "param.h"
+#include "viterbi.h"
+#include "scoped_ptr.h"
 #include "string_buffer.h"
-#include "utils.h"
-#include "writer.h"
+#include "tokenizer.h"
 
 namespace MeCab {
 
-Writer::Writer() : write_(&Writer::writeLattice) {}
-Writer::~Writer() {}
-
-void Writer::close() {
-  write_ = &Writer::writeLattice;
+namespace {
+void calc_alpha(Node *n, double beta) {
+  n->alpha = 0.0;
+  for (Path *path = n->lpath; path; path = path->lnext) {
+    n->alpha = logsumexp(n->alpha,
+                         -beta * path->cost + path->lnode->alpha,
+                         path == n->lpath);
+  }
 }
 
-bool Writer::open(const Param &param) {
-  const std::string ostyle = param.get<std::string>("output-format-type");
-  write_ = &Writer::writeLattice;
+void calc_beta(Node *n, double beta) {
+  n->beta = 0.0;
+  for (Path *path = n->rpath; path; path = path->rnext) {
+    n->beta = logsumexp(n->beta,
+                        -beta * path->cost + path->rnode->beta,
+                        path == n->rpath);
+  }
+}
+}  // namespace
 
-  if (ostyle == "wakati") {
-    write_ = &Writer::writeWakati;
-  } else if (ostyle == "none") {
-    write_ = &Writer::writeNone;
-  } else if (ostyle == "dump") {
-    write_ = &Writer::writeDump;
-  } else if (ostyle == "em") {
-    write_ = &Writer::writeEM;
-  } else {
-    // default values
-    std::string node_format = "%m\\t%H\\n";
-    std::string unk_format  = "%m\\t%H\\n";
-    std::string bos_format  = "";
-    std::string eos_format  = "EOS\\n";
-    std::string eon_format  = "";
+Viterbi::Viterbi()
+    :  tokenizer_(0), connector_(0),
+       cost_factor_(0) {}
 
-    std::string node_format_key = "node-format";
-    std::string bos_format_key  = "bos-format";
-    std::string eos_format_key  = "eos-format";
-    std::string unk_format_key  = "unk-format";
-    std::string eon_format_key  = "eon-format";
+Viterbi::~Viterbi() {}
 
-    if (!ostyle.empty()) {
-      node_format_key += "-";
-      node_format_key += ostyle;
-      bos_format_key += "-";
-      bos_format_key += ostyle;
-      eos_format_key += "-";
-      eos_format_key += ostyle;
-      unk_format_key += "-";
-      unk_format_key += ostyle;
-      eon_format_key += "-";
-      eon_format_key += ostyle;
-      const std::string tmp = param.get<std::string>(node_format_key.c_str());
-      CHECK_FALSE(!tmp.empty()) << "unkown format type [" << ostyle << "]";
-    }
+bool Viterbi::open(const Param &param) {
+  tokenizer_.reset(new Tokenizer<Node, Path>);
+  CHECK_FALSE(tokenizer_->open(param)) << tokenizer_->what();
+  CHECK_FALSE(tokenizer_->dictionary_info()) << "Dictionary is empty";
 
-    const std::string node_format2 =
-        param.get<std::string>(node_format_key.c_str());
-    const std::string bos_format2 =
-        param.get<std::string>(bos_format_key.c_str());
-    const std::string eos_format2 =
-        param.get<std::string>(eos_format_key.c_str());
-    const std::string unk_format2 =
-        param.get<std::string>(unk_format_key.c_str());
-    const std::string eon_format2 =
-        param.get<std::string>(eon_format_key.c_str());
+  connector_.reset(new Connector);
+  CHECK_FALSE(connector_->open(param)) << connector_->what();
 
-    if (node_format != node_format2 || bos_format != bos_format2 ||
-        eos_format != eos_format2 || unk_format != unk_format2) {
-      write_ = &Writer::writeUser;
-      if (node_format != node_format2) {
-        node_format = node_format2;
-      }
-      if (bos_format != bos_format2) {
-        bos_format = bos_format2;
-      }
-      if (eos_format != eos_format2) {
-        eos_format = eos_format2;
-      }
-      if (unk_format != unk_format2) {
-        unk_format = unk_format2;
-      } else if (node_format != node_format2) {
-        unk_format = node_format2;
-      } else {
-        unk_format = node_format;
-      }
-      if (eon_format != eon_format2) {
-        eon_format = eon_format2;
-      }
-      node_format_.reset_string(node_format.c_str());
-      bos_format_.reset_string(bos_format.c_str());
-      eos_format_.reset_string(eos_format.c_str());
-      unk_format_.reset_string(unk_format.c_str());
-      eon_format_.reset_string(eon_format.c_str());
-    }
+  CHECK_FALSE(tokenizer_->dictionary_info()->lsize ==
+              connector_->left_size() &&
+              tokenizer_->dictionary_info()->rsize ==
+              connector_->right_size())
+      << "Transition table and dictionary are not compatible";
+
+  cost_factor_ = param.get<int>("cost-factor");
+  if (cost_factor_ == 0) {
+    cost_factor_ = 800;
   }
 
   return true;
 }
 
-bool Writer::write(Lattice *lattice, StringBuffer *os) const {
-  if (!lattice || !lattice->is_available()) {
+bool Viterbi::analyze(Lattice *lattice) const {
+  if (!lattice || !lattice->sentence()) {
     return false;
   }
-  return (this->*write_)(lattice, os);
-}
 
-bool Writer::writeLattice(Lattice *lattice, StringBuffer *os) const {
-  for (const Node *node = lattice->bos_node()->next;
-       node->next; node = node->next) {
-    os->write(node->surface, node->length);
-    *os << '\t' << node->feature;  // << '\t';
-    *os << '\n';
+  if (!initPartial(lattice)) {
+    return false;
   }
-  *os << "EOS\n";
-  return true;
-}
 
-bool Writer::writeWakati(Lattice *lattice, StringBuffer *os) const {
-  for (const Node *node = lattice->bos_node()->next;
-       node->next; node = node->next) {
-    os->write(node->surface, node->length);
-    *os << ' ';
-  }
-  *os << '\n';
-  return true;
-}
-
-bool Writer::writeNone(Lattice *lattice, StringBuffer *os) const {
-  return true;  // do nothing
-}
-
-bool Writer::writeEM(Lattice *lattice, StringBuffer *os) const {
-  static const float min_prob = 0.0001;
-  for (const Node *node = lattice->bos_node(); node; node = node->next) {
-    if (node->prob >= min_prob) {
-      *os << "U\t";
-      if (node->stat == MECAB_BOS_NODE) {
-        *os << "BOS";
-      } else if (node->stat == MECAB_EOS_NODE) {
-        *os << "EOS";
-      }  else {
-        os->write(node->surface, node->length);
-      }
-      *os << '\t' << node->feature << '\t' << node->prob << '\n';
-    }
-    for (const Path *path = node->lpath; path; path = path->lnext) {
-      if (path->prob >= min_prob) {
-        *os << "B\t" << path->lnode->feature << '\t'
-            << node->feature << '\t' << path->prob << '\n';
-      }
-    }
-  }
-  *os << "EOS\n";
-  return true;
-}
-
-bool Writer::writeDump(Lattice *lattice, StringBuffer *os) const {
-  const char *str = lattice->sentence();
-  for (const Node *node = lattice->bos_node(); node; node = node->next) {
-    *os << node->id << ' ';
-    if (node->stat == MECAB_BOS_NODE) {
-      *os << "BOS";
-    } else if (node->stat == MECAB_EOS_NODE) {
-      *os << "EOS";
+  bool result = false;
+  if (lattice->has_request_type(MECAB_NBEST) ||
+      lattice->has_request_type(MECAB_MARGINAL_PROB)) {
+    // IsAllPath=true
+    if (lattice->has_constraint()) {
+      result = viterbi<true, true>(lattice);
     } else {
-      os->write(node->surface, node->length);
+      result = viterbi<true, false>(lattice);
     }
-
-    *os << ' ' << node->feature
-        << ' ' << static_cast<int>(node->surface - str)
-        << ' ' << static_cast<int>(node->surface - str + node->length)
-        << ' ' << node->rcAttr
-        << ' ' << node->lcAttr
-        << ' ' << node->posid
-        << ' ' << static_cast<int>(node->char_type)
-        << ' ' << static_cast<int>(node->stat)
-        << ' ' << static_cast<int>(node->isbest)
-        << ' ' << node->alpha
-        << ' ' << node->beta
-        << ' ' << node->prob
-        << ' ' << node->cost;
-
-    for (const Path *path = node->lpath; path; path = path->lnext) {
-      *os << ' ' << path->lnode->id << ':' << path->cost << ':' << path->prob;
+  } else {
+    // IsAllPath=false
+    if (lattice->has_constraint()) {
+      result = viterbi<false, true>(lattice);
+    } else {
+      result = viterbi<false, false>(lattice);
     }
-    *os << '\n';
   }
+
+  if (!result) {
+    return false;
+  }
+
+  if (!forwardbackward(lattice)) {
+    return false;
+  }
+
+  if (!buildBestLattice(lattice)) {
+    return false;
+  }
+
+  if (!buildAllLattice(lattice)) {
+    return false;
+  }
+
+  if (!initNBest(lattice)) {
+    return false;
+  }
+
   return true;
 }
 
-bool Writer::writeUser(Lattice *lattice, StringBuffer *os) const {
-  if (!writeNode(lattice, bos_format_.get(), lattice->bos_node(), os)) {
-    return false;
+const Tokenizer<Node, Path> *Viterbi::tokenizer() const {
+  return tokenizer_.get();
+}
+
+const Connector *Viterbi::connector() const {
+  return connector_.get();
+}
+
+// static
+bool Viterbi::forwardbackward(Lattice *lattice) {
+  if (!lattice->has_request_type(MECAB_MARGINAL_PROB)) {
+    return true;
   }
-  const Node *node = 0;
-  for (node = lattice->bos_node()->next; node->next; node = node->next) {
-    const char *fmt = (node->stat == MECAB_UNK_NODE ? unk_format_.get() :
-                       node_format_.get());
-    if (!writeNode(lattice, fmt, node, os)) {
+
+  Node **end_node_list   = lattice->end_nodes();
+  Node **begin_node_list = lattice->begin_nodes();
+
+  const size_t len = lattice->size();
+  const double theta = lattice->theta();
+
+  end_node_list[0]->alpha = 0.0;
+  for (int pos = 0; pos <= static_cast<long>(len); ++pos) {
+    for (Node *node = begin_node_list[pos]; node; node = node->bnext) {
+      calc_alpha(node, theta);
+    }
+  }
+
+  begin_node_list[len]->beta = 0.0;
+  for (int pos = static_cast<long>(len); pos >= 0; --pos) {
+    for (Node *node = end_node_list[pos]; node; node = node->enext) {
+      calc_beta(node, theta);
+    }
+  }
+
+  const double Z = begin_node_list[len]->alpha;
+  lattice->set_Z(Z);  // alpha of EOS
+
+  for (int pos = 0; pos <= static_cast<long>(len); ++pos) {
+    for (Node *node = begin_node_list[pos]; node; node = node->bnext) {
+      node->prob = std::exp(node->alpha + node->beta - Z);
+      for (Path *path = node->lpath; path; path = path->lnext) {
+        path->prob = std::exp(path->lnode->alpha
+                              - theta * path->cost
+                              + path->rnode->beta - Z);
+      }
+    }
+  }
+
+  return true;
+}
+
+// static
+bool Viterbi::buildResultForNBest(Lattice *lattice) {
+  return buildAllLattice(lattice);
+}
+
+// static
+bool Viterbi::buildAllLattice(Lattice *lattice) {
+  if (!lattice->has_request_type(MECAB_ALL_MORPHS)) {
+    return true;
+  }
+
+  Node *prev = lattice->bos_node();
+  const size_t len = lattice->size();
+  Node **begin_node_list = lattice->begin_nodes();
+
+  for (long pos = 0; pos <= static_cast<long>(len); ++pos) {
+    for (Node *node = begin_node_list[pos]; node; node = node->bnext) {
+      prev->next = node;
+      node->prev = prev;
+      prev = node;
+    }
+  }
+
+  return true;
+}
+
+// static
+bool Viterbi::buildAlternative(Lattice *lattice) {
+  Node **begin_node_list = lattice->begin_nodes();
+
+  const Node *bos_node = lattice->bos_node();
+  for (const Node *node = bos_node; node; node = node->next) {
+    if (node->stat == MECAB_BOS_NODE || node->stat == MECAB_EOS_NODE) {
+      continue;
+    }
+    const size_t pos = node->surface - lattice->sentence() -
+        node->rlength + node->length;
+    std::cout.write(node->surface, node->length);
+    std::cout << "\t" << node->feature << std::endl;
+    for (const Node *anode = begin_node_list[pos];
+         anode; anode = anode->bnext) {
+      if (anode->rlength == node->rlength &&
+          anode->length == node->length) {
+        std::cout << "@ ";
+        std::cout.write(anode->surface, anode->length);
+        std::cout << "\t" << anode->feature << std::endl;
+      }
+    }
+  }
+
+  std::cout << "EOS" << std::endl;
+
+  return true;
+}
+
+// static
+bool Viterbi::buildBestLattice(Lattice *lattice) {
+  Node *node = lattice->eos_node();
+  for (Node *prev_node; node->prev;) {
+    node->isbest = 1;
+    prev_node = node->prev;
+    prev_node->next = node;
+    node = prev_node;
+  }
+
+  return true;
+}
+
+// static
+bool Viterbi::initNBest(Lattice *lattice) {
+  if (!lattice->has_request_type(MECAB_NBEST)) {
+    return true;
+  }
+  lattice->allocator()->nbest_generator()->set(lattice);
+  return true;
+}
+
+// static
+bool Viterbi::initPartial(Lattice *lattice) {
+  if (!lattice->has_request_type(MECAB_PARTIAL)) {
+    if (lattice->has_constraint()) {
+      lattice->set_boundary_constraint(0, MECAB_TOKEN_BOUNDARY);
+      lattice->set_boundary_constraint(lattice->size(),
+                                       MECAB_TOKEN_BOUNDARY);
+    }
+    return true;
+  }
+
+  Allocator<Node, Path> *allocator = lattice->allocator();
+  char *str = allocator->partial_buffer(lattice->size() + 1);
+  strncpy(str, lattice->sentence(), lattice->size() + 1);
+
+  std::vector<char *> lines;
+  const size_t lsize = tokenize(str, "\n",
+                                std::back_inserter(lines),
+                                lattice->size() + 1);
+  char* column[2];
+  scoped_array<char> buf(new char[lattice->size() + 1]);
+  StringBuffer os(buf.get(), lattice->size() + 1);
+
+  std::vector<std::pair<char *, char *> > tokens;
+  tokens.reserve(lsize);
+
+  size_t pos = 0;
+  for (size_t i = 0; i < lsize; ++i) {
+    const size_t size = tokenize(lines[i], "\t", column, 2);
+    if (size == 1 && std::strcmp(column[0], "EOS") == 0) {
+      break;
+    }
+    const size_t len = std::strlen(column[0]);
+    if (size == 2) {
+      tokens.push_back(std::make_pair(column[0], column[1]));
+    } else {
+      tokens.push_back(std::make_pair(column[0], reinterpret_cast<char *>(0)));
+    }
+    os << column[0];
+    pos += len;
+  }
+
+  os << '\0';
+
+  lattice->set_sentence(os.str());
+
+  pos = 0;
+  for (size_t i = 0; i < tokens.size(); ++i) {
+    const char *surface = tokens[i].first;
+    const char *feature = tokens[i].second;
+    const size_t len = std::strlen(surface);
+    lattice->set_boundary_constraint(pos, MECAB_TOKEN_BOUNDARY);
+    lattice->set_boundary_constraint(pos + len, MECAB_TOKEN_BOUNDARY);
+    if (feature) {
+      lattice->set_feature_constraint(pos, pos + len, feature);
+      for (size_t n = 1; n < len; ++n) {
+        lattice->set_boundary_constraint(pos + n,
+                                         MECAB_INSIDE_TOKEN);
+      }
+    }
+    pos += len;
+  }
+
+  return true;
+}
+
+namespace {
+template <bool IsAllPath> bool connect(size_t pos, Node *rnode,
+                                       Node **begin_node_list,
+                                       Node **end_node_list,
+                                       const Connector *connector,
+                                       Allocator<Node, Path> *allocator) {
+  for (;rnode; rnode = rnode->bnext) {
+     long best_cost = 2147483647;
+    Node* best_node = 0;
+    for (Node *lnode = end_node_list[pos]; lnode; lnode = lnode->enext) {
+       int lcost = connector->cost(lnode, rnode);  // local cost
+       long cost = lnode->cost + lcost;
+
+      if (cost < best_cost) {
+        best_node  = lnode;
+        best_cost  = cost;
+      }
+
+      if (IsAllPath) {
+        Path *path   = allocator->newPath();
+        path->cost   = lcost;
+        path->rnode  = rnode;
+        path->lnode  = lnode;
+        path->lnext  = rnode->lpath;
+        rnode->lpath = path;
+        path->rnext  = lnode->rpath;
+        lnode->rpath = path;
+      }
+    }
+
+    // overflow check 2003/03/09
+    if (!best_node) {
       return false;
     }
-  }
-  if (!writeNode(lattice, eos_format_.get(), node, os)) {
-    return false;
-  }
-  return true;
-}
 
-bool Writer::writeNode(Lattice *lattice, const Node *node,
-                       StringBuffer *os) const {
-  switch (node->stat) {
-    case MECAB_BOS_NODE:
-      return writeNode(lattice, bos_format_.get(), node, os);
-    case MECAB_EOS_NODE:
-      return writeNode(lattice, eos_format_.get(), node, os);
-    case MECAB_UNK_NODE:
-      return writeNode(lattice, unk_format_.get(), node, os);
-    case MECAB_NOR_NODE:
-      return writeNode(lattice, node_format_.get(), node, os);
-    case MECAB_EON_NODE:
-      return writeNode(lattice, eon_format_.get(), node, os);
-  }
-  return true;
-}
-
-bool Writer::writeNode(Lattice *lattice,
-                       const char *p,
-                       const Node *node,
-                       StringBuffer *os) const {
-  scoped_fixed_array<char, BUF_SIZE> buf;
-  scoped_fixed_array<char *, 64> ptr;
-  size_t psize = 0;
-
-  for (; *p; p++) {
-    switch (*p) {
-      default: *os << *p; break;
-
-      case '\\': *os << getEscapedChar(*++p); break;
-
-      case '%': {  // macros
-        switch (*++p) {
-          default: {
-            const std::string error = "unknown meta char: " + *p;
-            lattice->set_what(error.c_str());
-            return false;
-          }
-            // input sentence
-          case 'S': os->write(lattice->sentence(), lattice->size()); break;
-            // sentence length
-          case 'L': *os << lattice->size(); break;
-            // morph
-          case 'm': os->write(node->surface, node->length); break;
-          case 'M': os->write(reinterpret_cast<const char *>
-                              (node->surface - node->rlength + node->length),
-                              node->rlength);
-            break;
-          case 'h': *os << node->posid; break;  // Part-Of-Speech ID
-          case '%': *os << '%'; break;         // %
-          case 'c': *os << static_cast<int>(node->wcost); break;  // word cost
-          case 'H': *os << node->feature; break;
-          case 't': *os << static_cast<unsigned int>(node->char_type); break;
-          case 's': *os << static_cast<unsigned int>(node->stat); break;
-          case 'P': *os << node->prob; break;
-          case 'p': {
-            switch (*++p) {
-              default:
-                lattice->set_what("[iseSCwcnblLh] is required after %p");
-                return false;
-              case 'i': *os << node->id; break;  // node id
-              case 'S': os->write(reinterpret_cast<const char*>
-                                  (node->surface -
-                                   node->rlength + node->length),
-                                  node->rlength - node->length);
-                break;  // space
-                // start position
-              case 's': *os << static_cast<int>(
-                  node->surface - lattice->sentence());
-                break;
-                // end position
-              case 'e': *os << static_cast<int>
-                    (node->surface - lattice->sentence() + node->length);
-                break;
-                // connection cost
-              case 'C': *os << node->cost -
-                    node->prev->cost - node->wcost;
-                break;
-              case 'w': *os << node->wcost; break;  // word cost
-              case 'c': *os << node->cost; break;  // best cost
-              case 'n': *os << (node->cost - node->prev->cost); break;
-                // node cost
-                // * if best path, otherwise ' '
-              case 'b': *os << (node->isbest ? '*' : ' '); break;
-              case 'P': *os << node->prob; break;
-              case 'A': *os << node->alpha; break;
-              case 'B': *os << node->beta; break;
-              case 'l': *os << node->length; break;  // length of morph
-                // length of morph including the spaces
-              case 'L': *os << node->rlength;    break;
-              case 'h': {  // Hidden Layer ID
-                switch (*++p) {
-                  default:
-                    lattice->set_what("lr is required after %ph");
-                    return false;
-                  case 'l': *os << node->lcAttr; break;   // current
-                  case 'r': *os << node->rcAttr; break;   // prev
-                }
-              } break;
-
-              case 'p': {
-                char mode = *++p;
-                char sep = *++p;
-                if (sep == '\\') {
-                  sep = getEscapedChar(*++p);
-                }
-                if (!node->lpath) {
-                  lattice->set_what("no path information is available");
-                  return false;
-                }
-                for (Path *path = node->lpath; path; path = path->lnext) {
-                  if (path != node->lpath) *os << sep;
-                  switch (mode) {
-                    case 'i': *os << path->lnode->id; break;
-                    case 'c': *os << path->cost; break;
-                    case 'P': *os << path->prob; break;
-                    default:
-                      lattice->set_what("[icP] is required after %pp");
-                      return false;
-                  }
-                }
-              } break;
-
-            }
-          } break;
-
-          case 'F':
-          case 'f': {
-            if (node->feature[0] == '\0') {
-              lattice->set_what("no feature information available");
-              return false;
-            }
-            if (!psize) {
-              std::strncpy(buf.get(), node->feature, buf.size());
-              psize = tokenizeCSV(buf.get(), ptr.get(), ptr.size());
-            }
-
-            // separator
-            char separator = '\t';  // default separator
-            if (*p == 'F') {  // change separator
-              if (*++p == '\\') {
-                separator = getEscapedChar(*++p);
-              } else {
-                separator = *p;
-              }
-            }
-
-            if (*++p !='[') {
-              lattice->set_what("cannot find '['");
-              return false;
-            }
-            size_t n = 0;
-            bool sep = false;
-            bool isfil = false;
-            p++;
-
-            for (;; ++p) {
-              switch (*p) {
-                case '0': case '1': case '2': case '3': case '4':
-                case '5': case '6': case '7': case '8': case '9':
-                  n = 10 * n +(*p - '0');
-                  break;
-                case ',': case ']':
-                  if (n >= psize) {
-                    lattice->set_what("given index is out of range");
-                    return false;
-                  }
-                  isfil = (ptr[n][0] != '*');
-                  if (isfil) {
-                    if (sep) {
-                      *os << separator;
-                    }
-                    *os << ptr[n];
-                  }
-                  if (*p == ']') {
-                    goto last;
-                  }
-                  sep = isfil;
-                  n = 0;
-                  break;
-                default:
-                  lattice->set_what("cannot find ']'");
-                  return false;
-              }
-            }
-          } last: break;
-        }  // end switch
-      } break;  // end case '%'
-    }  // end switch
+    rnode->prev = best_node;
+    rnode->next = 0;
+    rnode->cost = best_cost;
+    const size_t x = rnode->rlength + pos;
+    rnode->enext = end_node_list[x];
+    end_node_list[x] = rnode;
   }
 
   return true;
 }
+}  // namespace
+
+template <bool IsAllPath, bool IsPartial>
+bool Viterbi::viterbi(Lattice *lattice) const {
+  Node **end_node_list   = lattice->end_nodes();
+  Node **begin_node_list = lattice->begin_nodes();
+  Allocator<Node, Path> *allocator = lattice->allocator();
+  const size_t len = lattice->size();
+  const char *begin = lattice->sentence();
+  const char *end = begin + len;
+
+  Node *bos_node = tokenizer_->getBOSNode(lattice->allocator());
+  bos_node->surface = lattice->sentence();
+  end_node_list[0] = bos_node;
+
+  for (size_t pos = 0; pos < len; ++pos) {
+    if (end_node_list[pos]) {
+      Node *right_node = tokenizer_->lookup<IsPartial>(begin + pos, end,
+                                                       allocator, lattice);
+      begin_node_list[pos] = right_node;
+      if (!connect<IsAllPath>(pos, right_node,
+                              begin_node_list,
+                              end_node_list,
+                              connector_.get(),
+                              allocator)) {
+        lattice->set_what("too long sentence.");
+        return false;
+      }
+    }
+  }
+
+  Node *eos_node = tokenizer_->getEOSNode(lattice->allocator());
+  eos_node->surface = lattice->sentence() + lattice->size();
+  begin_node_list[lattice->size()] = eos_node;
+
+  for (long pos = len; static_cast<long>(pos) >= 0; --pos) {
+    if (end_node_list[pos]) {
+      if (!connect<IsAllPath>(pos, eos_node,
+                              begin_node_list,
+                              end_node_list,
+                              connector_.get(),
+                              allocator)) {
+        lattice->set_what("too long sentence.");
+        return false;
+      }
+      break;
+    }
+  }
+
+  end_node_list[0] = bos_node;
+  begin_node_list[lattice->size()] = eos_node;
+
+  return true;
 }
+}  // Mecab
